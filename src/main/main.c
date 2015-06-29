@@ -200,6 +200,54 @@ static void cleanup (int s)
 }
 
 
+/* == iPod Backlight code == */
+
+#include <fcntl.h>
+#include <unistd.h>
+#include <sys/ioctl.h>
+
+#define BACKLIGHT_OFF	0
+#define BACKLIGHT_ON	1
+#define FBIOSET_BACKLIGHT	_IOW('F', 0x25, int)
+
+static int backlight_current;
+
+static int ipod_ioctl(int request, int *arg)
+{
+	int fd;
+	fd = open("/dev/fb0", O_NONBLOCK);
+	if (fd < 0) fd = open("/dev/fb/0", O_NONBLOCK);
+	if (fd < 0) return -1;
+	if (ioctl(fd, request, arg) < 0) {
+		close(fd);
+		return -1;
+	}
+	close(fd);
+	return 0;
+}
+
+static void ipod_set_backlight(int backlight)
+{
+	ipod_ioctl(FBIOSET_BACKLIGHT, (int *)(long)backlight);
+}
+
+static void ipod_toggle_backlight()
+{
+	if (backlight_current == 0) {
+		ipod_set_backlight(BACKLIGHT_ON);
+		backlight_current = 1;
+	} else {
+		ipod_set_backlight(BACKLIGHT_OFF);
+		backlight_current = 0;
+	}
+}
+
+static void ipod_init_backlight()
+{
+	ipod_set_backlight(BACKLIGHT_ON);
+	backlight_current = 1;
+}
+
 static void process_echoback(unsigned long i)
 {
     unsigned long msg = i >> 4;
@@ -288,9 +336,30 @@ static void process_echoback(unsigned long i)
     k = cmd = 0;
 #endif
 
+#define SCROLL_MOD_NUM 3 // Via experimentation
+#define SCROLL_MOD(n) \
+    ({ \
+        static int scroll_count = 0; \
+        int use = 0; \
+        if (++scroll_count >= n) { \
+            scroll_count -= n; \
+            use = 1; \
+        } \
+        (use == 1); \
+    })
+
     if (k > 0) {
 	switch (cmd) {
-	case 'q':	/* quit */
+	case 'r':	/* volume increase */
+        if (SCROLL_MOD(SCROLL_MOD_NUM))
+	        xmp_gvol_inc(ctx);
+	    break;
+	case 'l':	/* volume decrease */
+	    if (SCROLL_MOD(SCROLL_MOD_NUM))
+	        xmp_gvol_dec(ctx);
+	    break;
+	case 'm':	/* quit */
+	    fprintf(stderr, "\nExiting...\n");
 	    skip = -2;
 	    xmp_mod_stop(ctx);
 	    if (pause)
@@ -301,7 +370,7 @@ static void process_echoback(unsigned long i)
 	    if (pause)
 		pause = xmp_mod_pause(ctx);
 	    break;
-	case 'b':	/* jump to previous order */
+	case 'w':	/* jump to previous order */
 	    xmp_ord_prev(ctx);
 	    if (pause)
 		pause = xmp_mod_pause(ctx);
@@ -318,10 +387,13 @@ static void process_echoback(unsigned long i)
 	    if (pause)
 		pause = xmp_mod_pause(ctx);
 	    break;
-	case ' ':	/* pause module */
+	case 'd':	/* pause module */
 	    fprintf (stderr, "%s",  (pause = xmp_mod_pause(ctx))
 		? "] - PAUSED\b\b\b\b\b\b\b\b\b\b"
 		: "]         \b\b\b\b\b\b\b\b\b\b");
+	    break;
+	case '\n':	/* toggle iPod's backlight */
+	    ipod_toggle_backlight();
 	    break;
 	case '1':
 	case '2':
@@ -430,6 +502,7 @@ int main (int argc, char **argv)
 	}
     }
 
+    ipod_init_backlight();
     xmp_register_event_callback(process_echoback);
 
     if (opt->verbosity) {
@@ -439,6 +512,7 @@ int main (int argc, char **argv)
 #ifdef __EMX__
 	fprintf(stderr, "OS/2 Port by Kevin Langman (langman@earthling.net)\n" );
 #endif
+	fprintf (stderr, "iPod Port by Keripo\n");
     }
 
     if (probeonly || (opt->verbosity)) {
